@@ -26,11 +26,9 @@ jobs:
         run: npm run build
       
       - name: Deploy to Hostinger
-        uses: SamKirkland/FTP-Deploy-Action@v4.3
+        uses: SamKirkland/FTP-Deploy-Action@v4.3.6
         with:
           server: ${{ secrets.HOSTINGER_FTP_SERVER }}
           username: ${{ secrets.HOSTINGER_FTP_USERNAME }}
           password: ${{ secrets.HOSTINGER_FTP_PASSWORD }}
           local-dir: dist/
-          port: 21
-          force-ipv4: true
