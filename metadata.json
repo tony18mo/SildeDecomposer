@@ -1,0 +1,5 @@
+{
+  "name": "SlideDecomposer AI",
+  "description": "Reverse-engineer flat slide images into editable PowerPoint presentations using Multi-Agent AI.",
+  "requestFramePermissions": []
+}
