@@ -163,7 +163,7 @@ const App: React.FC = () => {
       if (!activePrompt) {
         addLog(`${itemLabel} Analyst planning...`);
         const analystRes = await withRetry(
-            () => runAnalystStage(el, crop, 'gemini-2.0-flash-preview', state.slideBackgroundColor),
+            () => runAnalystStage(el, crop, 'gemini-3-flash-preview', state.slideBackgroundColor),
             MAX_STAGE_RETRIES, 
             `${itemLabel} Analyst`
         );
