@@ -35,13 +35,13 @@ const App: React.FC = () => {
     parallelCount: 3
   });
 
-  const [hasVeoKey, setHasVeoKey] = useState(false);
+  const [hasApiKey, setHasApiKey] = useState(false);
 
   useEffect(() => {
     const checkKey = async () => {
         if (window.aistudio?.hasSelectedApiKey) {
             const has = await window.aistudio.hasSelectedApiKey();
-            setHasVeoKey(has);
+            setHasApiKey(has);
         }
     };
     checkKey();
@@ -50,7 +50,8 @@ const App: React.FC = () => {
   const handleSelectKey = async () => {
     if (window.aistudio?.openSelectKey) {
         await window.aistudio.openSelectKey();
-        setHasVeoKey(true);
+        // Race condition mitigation: assume success after interaction
+        setHasApiKey(true);
     }
   };
 
@@ -75,9 +76,6 @@ const App: React.FC = () => {
     });
   };
 
-  /**
-   * Functional state updates to prevent race conditions during parallel processing.
-   */
   const updateElement = (id: string, updates: Partial<SlideElement> | ((prev: SlideElement) => Partial<SlideElement>)) => {
     setState(prev => ({
       ...prev,
@@ -120,23 +118,22 @@ const App: React.FC = () => {
           slideBackgroundColor: res.backgroundColor,
           currentStep: 'DETECTED' 
         }));
-        addLog(`Found ${res.data.length} elements.`);
-    } catch (err) {
-        addLog(`Detection Failed: ${err}`);
+        addLog(`Found ${res.data.length} elements using ${state.detectionModel.replace('gemini-', '')}.`);
+    } catch (err: any) {
+        if (err.message?.includes("Requested entity was not found")) {
+            addLog("Error: Invalid or missing cloud billing account. Please re-select key.");
+            setHasApiKey(false);
+        } else {
+            addLog(`Detection Failed: ${err}`);
+        }
         setState(prev => ({ ...prev, currentStep: 'IDLE' }));
     }
     setAction(undefined);
   };
 
-  /**
-   * Enhanced multi-attempt self-correction loop.
-   * Auto-retries up to 4 times based on QA agent feedback.
-   */
   const runVisualCleaningLoop = async (el: SlideElement, crop: string, manualPromptOverride?: string) => {
     const itemLabel = `[${el.id.split('-').pop()}]`;
     let success = false;
-    
-    // Determine context: initial run or user-triggered retry
     let activePrompt = manualPromptOverride || el.retryPrompt || el.initialPrompt || "";
     let isWhiteInterior = el.isWhiteInterior || false;
     let cleaningGoal = el.cleaningGoal || "";
@@ -144,14 +141,7 @@ const App: React.FC = () => {
 
     const modelToUse = state.modelMapping[el.type as keyof ModelMapping] || MODEL_IMAGE_CLEANING_FAST;
 
-    if (modelToUse === MODEL_IMAGE_CLEANING_PRO && !hasVeoKey) {
-        addLog(`${itemLabel} Error: Pro model needs API Key.`);
-        updateElement(el.id, { status: 'FAILED' });
-        return;
-    }
-
     try {
-      // Stage 1: Analyst Planning (only if no prompt exists)
       if (!activePrompt) {
         addLog(`${itemLabel} Analyst planning...`);
         const analystRes = await withRetry(
@@ -166,13 +156,11 @@ const App: React.FC = () => {
         updateElement(el.id, { initialPrompt: activePrompt, isWhiteInterior, cleaningGoal });
       }
 
-      // Main Self-Correction Loop
       while (currentAttempt < MAX_TOTAL_ATTEMPTS && !success) {
         currentAttempt++;
         updateElement(el.id, { status: 'PROCESSING', attempts: currentAttempt });
         addLog(`${itemLabel} Attempt ${currentAttempt}/${MAX_TOTAL_ATTEMPTS} starting...`);
 
-        // Stage 2: Cleaner
         const stage2Res = await withRetry(
             () => runCleanerStage(crop, activePrompt, modelToUse),
             MAX_STAGE_RETRIES, 
@@ -181,12 +169,10 @@ const App: React.FC = () => {
         updateTokenStats(stage2Res.usage);
         const cleanedRaw = stage2Res.base64;
         
-        // Background removal
         const transparencyMode = isWhiteInterior ? 'flood' : 'all';
         const transparent = await removeWhiteBackground(cleanedRaw, transparencyMode);
         updateElement(el.id, { cleanedImageBase64: transparent });
 
-        // Stage 3: QA Critic
         addLog(`${itemLabel} QA Agent evaluating...`);
         const stage3Res = await withRetry(
             () => runQAStage(crop, cleanedRaw, state.qaModel, cleaningGoal),
@@ -196,7 +182,6 @@ const App: React.FC = () => {
         updateTokenStats(stage3Res.usage);
         const qa = stage3Res.qaData;
 
-        // Update history (functional)
         updateElement(el.id, prev => ({
           cleaningHistory: [
             ...(prev.cleaningHistory || []),
@@ -213,10 +198,10 @@ const App: React.FC = () => {
           ],
           qaScore: qa.score,
           qaFeedback: qa.reason,
-          retryPrompt: qa.improvedPrompt || activePrompt // Feed improved prompt to next loop
+          retryPrompt: qa.improvedPrompt || activePrompt 
         }));
 
-        if (qa.verdict === 'PASS' && qa.score >= 85) { // Threshold updated to 85 to match new strict rubric
+        if (qa.verdict === 'PASS' && qa.score >= 85) {
           success = true;
           updateElement(el.id, { status: 'COMPLETED' });
           addLog(`${itemLabel} ✓ SUCCESS on attempt ${currentAttempt} (Score: ${qa.score})`);
@@ -226,7 +211,7 @@ const App: React.FC = () => {
           
           if (currentAttempt < MAX_TOTAL_ATTEMPTS) {
             addLog(`${itemLabel} Auto-retrying with self-correction...`);
-            await new Promise(r => setTimeout(r, 1000)); // Cool-down
+            await new Promise(r => setTimeout(r, 1000));
           }
         }
       }
@@ -236,8 +221,13 @@ const App: React.FC = () => {
         addLog(`${itemLabel} Stop: Max auto-attempts (${MAX_TOTAL_ATTEMPTS}) reached. Manual fix required.`);
       }
 
-    } catch (err) {
-      addLog(`${itemLabel} Critical Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+    } catch (err: any) {
+      if (err.message?.includes("Requested entity was not found")) {
+          addLog(`${itemLabel} Error: Invalid cloud billing account.`);
+          setHasApiKey(false);
+      } else {
+          addLog(`${itemLabel} Critical Error: ${err instanceof Error ? err.message : 'Unknown'}`);
+      }
       updateElement(el.id, { status: 'FAILED' });
     }
   };
@@ -302,6 +292,9 @@ const App: React.FC = () => {
             parallelCount={state.parallelCount} onParallelCountChange={(c) => setState(p => ({...p, parallelCount: c}))}
             currentAction={state.currentAction} currentActionStartTime={state.currentActionStartTime}
             onRunSingleElement={(id) => runVisualCleaningLoop(state.elements.find(e => e.id === id)!, state.elements.find(e => e.id === id)!.originalCropBase64!)}
+            isProcessingGlobal={state.currentStep === 'PROCESSING'}
+            pipelineStartTime={state.pipelineStartTime}
+            pipelineEndTime={state.pipelineEndTime}
         />
       )}
       <div className="flex-1 flex flex-col relative h-full">
@@ -311,13 +304,10 @@ const App: React.FC = () => {
                     <Layers className="text-blue-500" size={20}/>
                     <h1 className="text-lg font-bold tracking-tight">SlideDecomposer <span className="text-blue-500">AI</span></h1>
                 </div>
-                {!hasVeoKey && (
-                    <button 
-                        onClick={handleSelectKey}
-                        className="flex items-center gap-1.5 px-3 py-1 bg-amber-900/20 border border-amber-500/30 text-amber-400 text-xs font-bold rounded hover:bg-amber-900/40 transition-all"
-                    >
-                        <Shield size={14} /> Unlock Pro Shapes
-                    </button>
+                {hasApiKey && (
+                    <div className="flex items-center gap-1.5 px-3 py-1 bg-green-950/20 border border-green-500/30 text-green-400 text-[10px] font-bold rounded uppercase tracking-wider">
+                        <Shield size={12} /> Cloud Billing Connected
+                    </div>
                 )}
             </div>
             {state.currentStep === 'COMPLETED' && (
@@ -325,7 +315,17 @@ const App: React.FC = () => {
             )}
         </header>
         <main className="flex-1 flex relative overflow-hidden bg-gray-900">
-            {state.currentStep === 'IDLE' ? <div className="m-auto w-full max-w-lg px-6"><DropZone onFileSelect={handleFileSelect} /></div> : (
+            {state.currentStep === 'IDLE' ? (
+              <div className="m-auto w-full px-6">
+                <DropZone 
+                  onFileSelect={handleFileSelect} 
+                  detectionModel={state.detectionModel}
+                  onDetectionModelChange={(m) => setState(p => ({...p, detectionModel: m}))}
+                  hasApiKey={hasApiKey}
+                  onSelectKey={handleSelectKey}
+                />
+              </div>
+            ) : (
                 <>
                     <LayerOverlay 
                         imageSrc={state.originalImageBase64!} 
