@@ -10,7 +10,7 @@ interface LayerOverlayProps {
   onUpdateBox?: (id: string, box: [number, number, number, number]) => void;
 }
 
-export const LayerOverlay: React.FC<LayerOverlayProps> = ({ imageSrc, elements, selectedId, onSelect }) => {
+export const LayerOverlay: React.FC<LayerOverlayProps> = ({ imageSrc, elements, selectedId, onSelect, onUpdateBox }) => {
   return (
     <div className="relative w-full h-full bg-dots-pattern overflow-auto p-8 flex items-center justify-center">
       {/* 
