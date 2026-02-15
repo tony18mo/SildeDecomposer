@@ -12,7 +12,21 @@ import {
 import { SlideElement, TextRun } from '../types';
 import { padImageToSquare, unpadGeneratedImage, loadImage, resizeImage } from './imageProcessing';
 
-const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+// Store API key in a variable (set by App.tsx)
+let apiKey: string = '';
+
+export const setApiKey = (key: string) => {
+  apiKey = key;
+};
+
+export const getApiKey = () => apiKey;
+
+const getAiClient = () => {
+  if (!apiKey) {
+    throw new Error("API key not set. Please enter your API key.");
+  }
+  return new GoogleGenAI({ apiKey });
+};
 
 const cleanJsonString = (str: string): string => {
   let cleaned = str.trim();
@@ -48,7 +62,7 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries: number, stageN
   let lastError: any;
   for (let i = 0; i <= retries; i++) {
     try {
-      return await fn();
+      return await fn()
     } catch (e) {
       lastError = e;
       console.warn(`${stageName} Attempt ${i+1} Failed: ${e}`);
@@ -61,6 +75,7 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries: number, stageN
 };
 
 export const detectElements = async (imageBase64: string, modelName: string = MODEL_DETECTION) => {
+  const ai = getAiClient();
   const imgRef = await loadImage(imageBase64);
   // High-Res Detection: Use 2048px to ensure text descenders are clearly visible to the model.
   const optimizedImage = await resizeImage(imageBase64, 2048);
@@ -107,6 +122,7 @@ export const analyzeTextElement = async (
   slideHeightPx: number,
   paddingPx: number = 0
 ) => {
+  const ai = getAiClient();
   const response = await ai.models.generateContent({
     model: MODEL_TEXT_ANALYSIS,
     config: { responseMimeType: 'application/json' },
@@ -176,6 +192,7 @@ export const runAnalystStage = async (
   model: string, 
   backgroundColor: string = '#FFFFFF'
 ) => {
+  const ai = getAiClient();
   const promptTemplate = SYSTEM_PROMPT_ANALYST
     .replace('{type}', element.type)
     .replace('{description}', element.description || 'object')
@@ -209,6 +226,7 @@ export const runAnalystStage = async (
 };
 
 export const runCleanerStage = async (crop: string, prompt: string, model: string, inputOverride?: string) => {
+  const ai = getAiClient();
   const img = await loadImage(crop);
   const squareInput = await padImageToSquare(inputOverride || crop);
   
@@ -242,6 +260,7 @@ export const runCleanerStage = async (crop: string, prompt: string, model: strin
 };
 
 export const runQAStage = async (originalCrop: string, cleanedResult: string, model: string, cleaningGoal: string) => {
+  const ai = getAiClient();
   const criticPrompt = PROMPT_QA_CRITIC.replace('{cleaningGoal}', cleaningGoal);
   const response = await withTimeout<GenerateContentResponse>(
     ai.models.generateContent({

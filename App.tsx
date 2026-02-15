@@ -7,9 +7,9 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { TerminalPanel } from './components/TerminalPanel';
 import { AppState, SlideElement, ElementType, TokenStats, CleaningHistoryItem, ModelMapping } from './types';
 import { fileToBase64, loadImage, cropImage, removeWhiteBackground } from './services/imageProcessing';
-import { detectElements, analyzeTextElement, runAnalystStage, runCleanerStage, runQAStage, withRetry } from './services/geminiService';
+import { detectElements, analyzeTextElement, runAnalystStage, runCleanerStage, runQAStage, withRetry, setApiKey as setGeminiApiKey } from './services/geminiService';
 import { generatePresentation } from './services/pptxService';
-import { Download, Layers, Shield } from 'lucide-react';
+import { Download, Layers, Shield, Key } from 'lucide-react';
 import { MODEL_IMAGE_CLEANING_FAST, MODEL_IMAGE_CLEANING_PRO, MODEL_QA, MODEL_DETECTION } from './constants';
 
 const MAX_TOTAL_ATTEMPTS = 4;
@@ -35,23 +35,36 @@ const App: React.FC = () => {
     parallelCount: 3
   });
 
+  const [apiKeyInput, setApiKeyInput] = useState('');
   const [hasApiKey, setHasApiKey] = useState(false);
+  const [showApiKeyInput, setShowApiKeyInput] = useState(false);
 
   useEffect(() => {
-    const checkKey = async () => {
-        if (window.aistudio?.hasSelectedApiKey) {
-            const has = await window.aistudio.hasSelectedApiKey();
-            setHasApiKey(has);
-        }
-    };
-    checkKey();
+    // Check for stored API key in localStorage
+    const storedKey = localStorage.getItem('gemini_api_key');
+    if (storedKey) {
+      setGeminiApiKey(storedKey);
+      setHasApiKey(true);
+    }
   }, []);
 
-  const handleSelectKey = async () => {
-    if (window.aistudio?.openSelectKey) {
-        await window.aistudio.openSelectKey();
-        setHasApiKey(true);
+  const handleSaveApiKey = () => {
+    if (apiKeyInput.trim()) {
+      setGeminiApiKey(apiKeyInput.trim());
+      localStorage.setItem('gemini_api_key', apiKeyInput.trim());
+      setHasApiKey(true);
+      setShowApiKeyInput(false);
+      setApiKeyInput('');
     }
+  };
+
+  const handleSelectKey = async () => {
+    setShowApiKeyInput(true);
+  };
+
+  const handleClearApiKey = () => {
+    localStorage.removeItem('gemini_api_key');
+    setHasApiKey(false);
   };
 
   const addLog = (msg: string) => setState(prev => ({ ...prev, logs: [...prev.logs, msg] }));
@@ -86,11 +99,27 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleUpdateElementBox = (id: string, box: [number, number, number, number]) => {
+    updateElement(id, { 
+      box_2d: box,
+      status: 'PENDING',
+      originalCropBase64: undefined,
+      cleanedImageBase64: undefined,
+      attempts: 0,
+      cleaningHistory: []
+    });
+  };
+
   const handleUpdatePrompt = (id: string, prompt: string) => {
     updateElement(id, { retryPrompt: prompt });
   };
 
   const handleFileSelect = async (file: File) => {
+    if (!hasApiKey) {
+      addLog("Error: Please enter your API key first.");
+      setShowApiKeyInput(true);
+      return;
+    }
     addLog(`Loading ${file.name}...`);
     const base64 = await fileToBase64(file);
     const img = await loadImage(base64);
@@ -109,8 +138,9 @@ const App: React.FC = () => {
         addLog(`Found ${res.data.length} elements using ${state.detectionModel.replace('gemini-', '')}.`);
     } catch (err: any) {
         if (err.message?.includes("Requested entity was not found")) {
-            addLog("Error: Invalid or missing cloud billing account. Please re-select key.");
+            addLog("Error: Invalid or missing API key. Please check your key.");
             setHasApiKey(false);
+            localStorage.removeItem('gemini_api_key');
         } else {
             addLog(`Detection Failed: ${err}`);
         }
@@ -211,8 +241,9 @@ const App: React.FC = () => {
 
     } catch (err: any) {
       if (err.message?.includes("Requested entity was not found")) {
-          addLog(`${itemLabel} Error: Invalid cloud billing account.`);
+          addLog(`${itemLabel} Error: Invalid API key.`);
           setHasApiKey(false);
+          localStorage.removeItem('gemini_api_key');
       } else {
           addLog(`${itemLabel} Critical Error: ${err instanceof Error ? err.message : 'Unknown'}`);
       }
@@ -234,9 +265,6 @@ const App: React.FC = () => {
         if (!el) break;
         const idSuffix = el.id.split('-').pop() ?? '';
         setAction(`Task: ${el.type} #${idSuffix}`);
-        
-        // IMPORTANT: For text, we use a 20px buffer to prevent character clipping.
-        // We MUST pass this padding value to the extraction service for math calibration.
         const padding = el.type === ElementType.TEXT ? 20 : undefined;
         const crop = cropImage(sourceImg, el.box_2d, padding);
         
@@ -273,6 +301,52 @@ const App: React.FC = () => {
 
   return (
     <div className="flex h-screen bg-black text-gray-100 font-sans overflow-hidden">
+      {showApiKeyInput && (
+        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 rounded-lg p-6 w-full max-w-md">
+            <div className="flex items-center gap-3 mb-4">
+              <Key className="text-blue-500" size={24} />
+              <h2 className="text-xl font-bold">Enter API Key</h2>
+            </div>
+            <p className="text-gray-400 text-sm mb-4">
+              Enter your Google Gemini API key to use this app. You can get one from{' '}
+              <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener noreferrer" className="text-blue-500 hover:underline">
+                Google AI Studio
+              </a>
+            </p>
+            <input
+              type="password"
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+              placeholder="Enter your API key"
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white mb-4"
+              onKeyDown={(e) => e.key === 'Enter' && handleSaveApiKey()}
+            />
+            <div className="flex gap-3">
+              {hasApiKey && (
+                <button
+                  onClick={handleClearApiKey}
+                  className="px-4 py-2 bg-red-600 hover:bg-red-500 rounded text-sm font-medium"
+                >
+                  Clear Key
+                </button>
+              )}
+              <button
+                onClick={() => setShowApiKeyInput(false)}
+                className="px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded text-sm font-medium"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSaveApiKey}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded text-sm font-medium flex-1"
+              >
+                Save Key
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       {state.currentStep !== 'IDLE' && (
         <ProcessingStatus 
             elements={state.elements} selectedId={state.selectedElementId}
@@ -300,18 +374,23 @@ const App: React.FC = () => {
                 </div>
                 {hasApiKey && (
                     <div className="flex items-center gap-1.5 px-3 py-1 bg-green-950/20 border border-green-500/30 text-green-400 text-[10px] font-bold rounded uppercase tracking-wider">
-                        <Shield size={12} /> Cloud Billing Connected
+                        <Shield size={12} /> API Key Configured
                     </div>
                 )}
             </div>
-            {state.elements.length > 0 && (
-                <button 
-                    onClick={() => generatePresentation(state.elements, state.originalImageBase64, state.imageDimensions.width, state.imageDimensions.height)} 
-                    className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 px-4 py-1.5 rounded text-xs font-bold transition-all shadow-lg active:scale-95"
-                >
-                    <Download size={14}/><span>Download PPTX</span>
-                </button>
-            )}
+            <div className="flex items-center gap-2">
+                {!hasApiKey && (
+                    <button 
+                        onClick={handleSelectKey}
+                        className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs font-medium transition-colors"
+                    >
+                        <Key size={14} /> Enter API Key
+                    </button>
+                )}
+                {state.currentStep === 'COMPLETED' && (
+                    <button onClick={() => generatePresentation(state.elements, state.originalImageBase64, state.imageDimensions.width, state.imageDimensions.height)} className="flex items-center space-x-2 bg-blue-600 hover:bg-blue-500 px-4 py-1.5 rounded text-xs font-bold transition-all shadow-lg"><Download size={14}/><span>Download PPTX</span></button>
+                )}
+            </div>
         </header>
         <main className="flex-1 flex relative overflow-hidden bg-gray-900">
             {state.currentStep === 'IDLE' ? (
@@ -331,6 +410,7 @@ const App: React.FC = () => {
                         elements={state.elements} 
                         selectedId={state.selectedElementId} 
                         onSelect={handleSelectElement}
+                        onUpdateBox={handleUpdateElementBox}
                     />
                     <TerminalPanel logs={state.logs} onClear={() => setState(p => ({...p, logs: []}))}/>
                 </>
