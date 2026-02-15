@@ -28,6 +28,55 @@ const getAiClient = () => {
   return new GoogleGenAI({ apiKey });
 };
 
+// Parse Google API errors and return user-friendly messages
+const parseGoogleApiError = (error: any): string => {
+  // Try to extract error details from the response
+  const errorMessage = error?.message || error?.toString() || 'Unknown error';
+  
+  // Check for specific error codes
+  if (errorMessage.includes('401') || errorMessage.includes('UNAUTHENTICATED')) {
+    return "Invalid API key. Please check your Google AI Studio API key and try again.";
+  }
+  
+  if (errorMessage.includes('403') || errorMessage.includes('PERMISSION_DENIED')) {
+    return "Access forbidden. Your API key may not have the required permissions or the API may be disabled.";
+  }
+  
+  if (errorMessage.includes('404') || errorMessage.includes('NOT_FOUND')) {
+    return "Model not found. The specified model may not exist or is not available.";
+  }
+  
+  if (errorMessage.includes('429') || errorMessage.includes('RESOURCE_EXHAUSTED')) {
+    return "Rate limit exceeded or quota exhausted. Please wait a moment and try again.";
+  }
+  
+  if (errorMessage.includes('500') || errorMessage.includes('INTERNAL_ERROR')) {
+    return "Google API server error. Please try again in a few moments.";
+  }
+  
+  if (errorMessage.includes('400') || errorMessage.includes('BAD_REQUEST')) {
+    return "Invalid request. Please check your input and try again.";
+  }
+  
+  if (errorMessage.includes('Requested entity was not found')) {
+    return "Invalid API key. Please check your Google AI Studio API key.";
+  }
+  
+  // Return the original error if we can't identify it
+  return errorMessage;
+};
+
+// Wrap API calls with error handling
+const withApiErrorHandling = async <T>(fn: () => Promise<T>): Promise<T> => {
+  try {
+    return await fn();
+  } catch (error: any) {
+    const parsedError = parseGoogleApiError(error);
+    console.error('Google API Error:', parsedError);
+    throw new Error(parsedError);
+  }
+};
+
 const cleanJsonString = (str: string): string => {
   let cleaned = str.trim();
   if (cleaned.startsWith('```json')) cleaned = cleaned.replace('```json', '');
@@ -62,7 +111,7 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries: number, stageN
   let lastError: any;
   for (let i = 0; i <= retries; i++) {
     try {
-      return await fn()
+      return await withApiErrorHandling(fn);
     } catch (e) {
       lastError = e;
       console.warn(`${stageName} Attempt ${i+1} Failed: ${e}`);
@@ -88,14 +137,16 @@ COORDINATE GROUNDING:
 - CRITICAL: BOUNDING BOXES MUST INCLUDE DESCENDERS (g, y, p, q, j).
 - If text box looks too "high", you missed the descenders. Extend ymax down.`;
 
-  const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview', 
-    config: {
-      systemInstruction: SYSTEM_PROMPT_DETECTION,
-      responseMimeType: 'application/json',
-    },
-    contents: { parts: [base64ToDataPart(optimizedImage), { text: promptText }] }
-  });
+  const response = await withApiErrorHandling(() => 
+    ai.models.generateContent({
+      model: 'gemini-3-pro-preview', 
+      config: {
+        systemInstruction: SYSTEM_PROMPT_DETECTION,
+        responseMimeType: 'application/json',
+      },
+      contents: { parts: [base64ToDataPart(optimizedImage), { text: promptText }] }
+    })
+  );
 
   const result = JSON.parse(cleanJsonString(response.text || '{"elements": []}'));
   const rawElements = result.elements || [];
@@ -123,11 +174,13 @@ export const analyzeTextElement = async (
   paddingPx: number = 0
 ) => {
   const ai = getAiClient();
-  const response = await ai.models.generateContent({
-    model: MODEL_TEXT_ANALYSIS,
-    config: { responseMimeType: 'application/json' },
-    contents: { parts: [base64ToDataPart(crop), { text: PROMPT_TEXT_EXTRACTION }] }
-  });
+  const response = await withApiErrorHandling(() =>
+    ai.models.generateContent({
+      model: MODEL_TEXT_ANALYSIS,
+      config: { responseMimeType: 'application/json' },
+      contents: { parts: [base64ToDataPart(crop), { text: PROMPT_TEXT_EXTRACTION }] }
+    })
+  );
   const data = JSON.parse(cleanJsonString(response.text || '{}'));
   
   // GEOMETRIC FONT SIZE CALCULATION
@@ -199,11 +252,13 @@ export const runAnalystStage = async (
     .replace(/{bgColor}/g, backgroundColor);
 
   const response = await withTimeout<GenerateContentResponse>(
-    ai.models.generateContent({
-      model,
-      config: { responseMimeType: 'application/json' },
-      contents: { parts: [base64ToDataPart(crop), { text: promptTemplate }] }
-    }),
+    withApiErrorHandling(() =>
+      ai.models.generateContent({
+        model,
+        config: { responseMimeType: 'application/json' },
+        contents: { parts: [base64ToDataPart(crop), { text: promptTemplate }] }
+      })
+    ),
     60000, "Analyst Stage Timeout"
   );
   
@@ -231,11 +286,13 @@ export const runCleanerStage = async (crop: string, prompt: string, model: strin
   const squareInput = await padImageToSquare(inputOverride || crop);
   
   const response = await withTimeout<GenerateContentResponse>(
-    ai.models.generateContent({
-      model,
-      config: { imageConfig: { aspectRatio: "1:1" } },
-      contents: { parts: [base64ToDataPart(squareInput), { text: `ERASE TASK: ${prompt}\n\nMaintain target object fidelity. Output on pure white #FFFFFF background.` }] }
-    }),
+    withApiErrorHandling(() =>
+      ai.models.generateContent({
+        model,
+        config: { imageConfig: { aspectRatio: "1:1" } },
+        contents: { parts: [base64ToDataPart(squareInput), { text: `ERASE TASK: ${prompt}\n\nMaintain target object fidelity. Output on pure white #FFFFFF background.` }] }
+      })
+    ),
     120000, "Cleaner Stage Timeout"
   );
   
@@ -263,15 +320,17 @@ export const runQAStage = async (originalCrop: string, cleanedResult: string, mo
   const ai = getAiClient();
   const criticPrompt = PROMPT_QA_CRITIC.replace('{cleaningGoal}', cleaningGoal);
   const response = await withTimeout<GenerateContentResponse>(
-    ai.models.generateContent({
-      model,
-      config: { responseMimeType: 'application/json' },
-      contents: { parts: [
-        { text: "Original Reference Crop:" }, base64ToDataPart(originalCrop),
-        { text: "Cleaned Candidate Result:" }, base64ToDataPart(cleanedResult),
-        { text: criticPrompt }
-      ]}
-    }),
+    withApiErrorHandling(() =>
+      ai.models.generateContent({
+        model,
+        config: { responseMimeType: 'application/json' },
+        contents: { parts: [
+          { text: "Original Reference Crop:" }, base64ToDataPart(originalCrop),
+          { text: "Cleaned Candidate Result:" }, base64ToDataPart(cleanedResult),
+          { text: criticPrompt }
+        ]}
+      })
+    ),
     120000, "QA Stage Timeout"
   );
 
