@@ -144,7 +144,7 @@ COORDINATE GROUNDING:
         systemInstruction: SYSTEM_PROMPT_DETECTION,
         responseMimeType: 'application/json',
       },
-      contents: { parts: [base64ToDataPart(optimizedImage), { text: promptText }] }
+      contents: [base64ToDataPart(optimizedImage), { text: promptText }]
     })
   );
 
@@ -178,7 +178,7 @@ export const analyzeTextElement = async (
     ai.models.generateContent({
       model: MODEL_TEXT_ANALYSIS,
       config: { responseMimeType: 'application/json' },
-      contents: { parts: [base64ToDataPart(crop), { text: PROMPT_TEXT_EXTRACTION }] }
+      contents: [base64ToDataPart(crop), { text: PROMPT_TEXT_EXTRACTION }]
     })
   );
   const data = JSON.parse(cleanJsonString(response.text || '{}'));
@@ -256,7 +256,7 @@ export const runAnalystStage = async (
       ai.models.generateContent({
         model,
         config: { responseMimeType: 'application/json' },
-        contents: { parts: [base64ToDataPart(crop), { text: promptTemplate }] }
+        contents: [base64ToDataPart(crop), { text: promptTemplate }]
       })
     ),
     60000, "Analyst Stage Timeout"
@@ -290,7 +290,7 @@ export const runCleanerStage = async (crop: string, prompt: string, model: strin
       ai.models.generateContent({
         model,
         config: { imageConfig: { aspectRatio: "1:1" } },
-        contents: { parts: [base64ToDataPart(squareInput), { text: `ERASE TASK: ${prompt}\n\nMaintain target object fidelity. Output on pure white #FFFFFF background.` }] }
+        contents: [base64ToDataPart(squareInput), { text: `ERASE TASK: ${prompt}\n\nMaintain target object fidelity. Output on pure white #FFFFFF background.` }]
       })
     ),
     120000, "Cleaner Stage Timeout"
@@ -324,11 +324,11 @@ export const runQAStage = async (originalCrop: string, cleanedResult: string, mo
       ai.models.generateContent({
         model,
         config: { responseMimeType: 'application/json' },
-        contents: { parts: [
+        contents: [
           { text: "Original Reference Crop:" }, base64ToDataPart(originalCrop),
           { text: "Cleaned Candidate Result:" }, base64ToDataPart(cleanedResult),
           { text: criticPrompt }
-        ]}
+        ]
       })
     ),
     120000, "QA Stage Timeout"
