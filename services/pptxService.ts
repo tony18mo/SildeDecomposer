@@ -12,15 +12,12 @@ export const generatePresentation = async (
   const pptx = new PptxGenJS();
   const slide = pptx.addSlide();
 
-  // Sort by Z-Index (ascending) so background items render first
   const sortedElements = [...elements].sort((a, b) => a.z_order - b.z_order);
 
-  // Scaling factors: how many inches per pixel
   const scaleX = PPTX_WIDTH_INCHES / imageWidth;
   const scaleY = PPTX_HEIGHT_INCHES / imageHeight;
 
   for (const el of sortedElements) {
-    // 1. Calculate original pixel coordinates from normalized 0-1000
     const [ymin, xmin, ymax, xmax] = el.box_2d;
     const x1_px = (xmin / 1000) * imageWidth;
     const y1_px = (ymin / 1000) * imageHeight;
@@ -31,24 +28,32 @@ export const generatePresentation = async (
     const detH_px = y2_px - y1_px;
 
     if (el.type === ElementType.TEXT) {
-      if (el.textContent) {
-        slide.addText(el.textContent, {
+      if (el.textRuns && el.textRuns.length > 0) {
+        // Map our TextRuns to PptxGenJS TextObjects
+        const textObjects = el.textRuns.map(run => ({
+            text: run.text,
+            options: {
+                color: run.color.replace('#', ''),
+                bold: run.bold,
+                italic: run.italic,
+                // Sizing is now pre-calculated in geminiService.ts
+                fontSize: run.size,
+                fontFace: run.font
+            }
+        }));
+
+        slide.addText(textObjects, {
           x: x1_px * scaleX, 
           y: y1_px * scaleY, 
           w: detW_px * scaleX, 
           h: detH_px * scaleY,
-          color: el.textColor ? el.textColor.replace('#', '') : '000000',
-          bold: el.isBold,
-          fontSize: 12, 
           valign: 'top',
         });
       }
     } else {
-      // Visual Elements (Shape, Icon, Image)
       const imgData = el.cleanedImageBase64 || el.originalCropBase64;
       
       if (imgData) {
-        // Recalculate crop bounds in pixels exactly as done in imageProcessing.ts
         const cropX1 = Math.max(0, x1_px - CROP_PADDING);
         const cropY1 = Math.max(0, y1_px - CROP_PADDING);
         const cropX2 = Math.min(imageWidth, x2_px + CROP_PADDING);
@@ -57,7 +62,6 @@ export const generatePresentation = async (
         const cropW_px = cropX2 - cropX1;
         const cropH_px = cropY2 - cropY1;
 
-        // Convert crop dimensions and position to inches
         const finalX = cropX1 * scaleX;
         const finalY = cropY1 * scaleY;
         const finalW = cropW_px * scaleX;
@@ -69,7 +73,6 @@ export const generatePresentation = async (
           y: finalY,
           w: finalW,
           h: finalH,
-          // Use cover/contain sizing carefully or no sizing if we trust our math
           sizing: { type: 'contain', w: finalW, h: finalH }
         });
       }

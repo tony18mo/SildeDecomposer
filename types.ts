@@ -14,6 +14,15 @@ export interface BoundingBox {
   xmax: number;
 }
 
+export interface TextRun {
+  text: string;
+  color: string;
+  size: number;
+  bold: boolean;
+  italic: boolean;
+  font: string;
+}
+
 export interface CleaningHistoryItem {
   attempt: number;
   timestamp: number;
@@ -37,10 +46,16 @@ export interface SlideElement {
   originalCropBase64?: string;
   cleanedImageBase64?: string;
   
+  // Mixed-style text support
+  textRuns?: TextRun[];
+  
+  // Legacy single-style support (fallback)
   textContent?: string;
   textColor?: string;
   isBold?: boolean;
+  isItalic?: boolean;
   fontSize?: number;
+  fontFace?: string;
 
   attempts: number;
   qaScore?: number;
@@ -81,8 +96,8 @@ export interface AppState {
   logs: string[];
   tokenStats: TokenStats;
   detectionModel: string;
-  cleaningModel: string; // Global default (if needed)
-  modelMapping: ModelMapping; // Specific routing
+  cleaningModel: string; 
+  modelMapping: ModelMapping; 
   qaModel: string;
   parallelCount: number;
   slideBackgroundColor?: string; 

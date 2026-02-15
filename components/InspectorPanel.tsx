@@ -41,7 +41,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ element, onClose
   const isUserModified = element.initialPrompt && editedPrompt !== element.initialPrompt;
 
   const handleRun = () => {
-    // If user modified, we explicitly pass the prompt to runVisualCleaningLoop
     onRunAgent(element.id, isUserModified ? editedPrompt : undefined);
   };
 
@@ -90,11 +89,6 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ element, onClose
                     {isProcessing && <RefreshCw size={12} className="animate-spin"/>}
                     {element.status}
                 </span>
-            </div>
-
-            <div className="pt-2 border-t border-gray-700/50 flex items-center gap-2 text-[10px] text-amber-400/80 font-medium italic">
-                <MousePointer2 size={10} />
-                Drag box on slide to adjust crop
             </div>
             
             {!isText && element.qaScore !== undefined && (
@@ -218,16 +212,33 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ element, onClose
         </div>
         
         {isText && isCompleted && (
-            <div className="space-y-2">
-                 <h3 className="text-xs font-semibold text-gray-400 uppercase">Extracted Text</h3>
-                 <div className="p-3 bg-black border border-gray-800 rounded text-sm text-gray-200 font-mono break-words shadow-inner">
-                    {element.textContent}
-                 </div>
-                 <div className="flex gap-2 text-xs bg-gray-800/50 p-2 rounded">
-                    <span className="text-gray-500 flex items-center gap-1">
-                        <Palette size={10}/> Color: <span style={{color: element.textColor}}>{element.textColor}</span>
-                    </span>
-                    <span className="text-gray-500 border-l border-gray-700 pl-2">Bold: {element.isBold ? 'Yes' : 'No'}</span>
+            <div className="space-y-3">
+                 <h3 className="text-xs font-semibold text-gray-400 uppercase flex items-center gap-2">
+                    <FileJson size={14} />
+                    Extracted Metadata
+                 </h3>
+                 <div className="p-3 bg-black border border-gray-800 rounded space-y-3 shadow-inner">
+                    {element.textRuns && element.textRuns.length > 0 ? (
+                        element.textRuns.map((run, i) => (
+                            <div key={i} className="border-b border-gray-800 last:border-0 pb-2 mb-2 last:pb-0 last:mb-0">
+                                <div className="flex items-center justify-between text-[10px] mb-1.5">
+                                    <span className="bg-blue-900/20 text-blue-300 px-1.5 py-0.5 rounded font-bold">{run.font} • {run.size}pt</span>
+                                    <div className="w-3 h-3 rounded border border-gray-700" style={{ backgroundColor: run.color }}></div>
+                                </div>
+                                <p style={{ 
+                                    color: run.color, 
+                                    fontWeight: run.bold ? 'bold' : 'normal',
+                                    fontStyle: run.italic ? 'italic' : 'normal',
+                                    fontSize: '13px',
+                                    fontFamily: 'monospace'
+                                }}>
+                                    {run.text}
+                                </p>
+                            </div>
+                        ))
+                    ) : (
+                        <span className="italic text-gray-500 text-xs">No content extracted.</span>
+                    )}
                  </div>
             </div>
         )}
@@ -331,7 +342,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({ element, onClose
         ) : (
              <div className="flex items-center justify-center gap-2 text-center text-xs text-gray-500 bg-gray-900 p-2 rounded border border-gray-800">
                 <Info size={14}/>
-                Text extracted via OCR
+                Text extracted via Advanced OCR
              </div>
         )}
       </div>

@@ -9,24 +9,10 @@ import {
   SYSTEM_PROMPT_ANALYST,
   getPromptForCleaning
 } from '../constants';
-import { SlideElement } from '../types';
+import { SlideElement, TextRun } from '../types';
 import { padImageToSquare, unpadGeneratedImage, loadImage, resizeImage } from './imageProcessing';
 
-// Create a mutable reference to store the API key
-let apiKey: string = '';
-
-export const setApiKey = (key: string) => {
-  apiKey = key;
-};
-
-export const getApiKey = () => apiKey;
-
-const getAiClient = () => {
-  if (!apiKey) {
-    throw new Error("API key not set. Please enter your API key.");
-  }
-  return new GoogleGenAI({ apiKey });
-};
+const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
 const cleanJsonString = (str: string): string => {
   let cleaned = str.trim();
@@ -62,7 +48,7 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries: number, stageN
   let lastError: any;
   for (let i = 0; i <= retries; i++) {
     try {
-      return await fn()
+      return await fn();
     } catch (e) {
       lastError = e;
       console.warn(`${stageName} Attempt ${i+1} Failed: ${e}`);
@@ -75,16 +61,25 @@ export const withRetry = async <T>(fn: () => Promise<T>, retries: number, stageN
 };
 
 export const detectElements = async (imageBase64: string, modelName: string = MODEL_DETECTION) => {
-  const ai = getAiClient();
-  // Increased resolution to 1536 for better icon/detail visibility
-  const optimizedImage = await resizeImage(imageBase64, 1536);
+  const imgRef = await loadImage(imageBase64);
+  // High-Res Detection: Use 2048px to ensure text descenders are clearly visible to the model.
+  const optimizedImage = await resizeImage(imageBase64, 2048);
+  
+  const promptText = `TASK: DECOMPOSE THIS SLIDE.
+IMAGE DATA: ${imgRef.naturalWidth}x${imgRef.naturalHeight} pixels.
+COORDINATE GROUNDING: 
+- [0,0] is the top-left pixel.
+- [1000,1000] is the bottom-right pixel.
+- CRITICAL: BOUNDING BOXES MUST INCLUDE DESCENDERS (g, y, p, q, j).
+- If text box looks too "high", you missed the descenders. Extend ymax down.`;
+
   const response = await ai.models.generateContent({
-    model: modelName,
+    model: 'gemini-3-pro-preview', 
     config: {
       systemInstruction: SYSTEM_PROMPT_DETECTION,
       responseMimeType: 'application/json',
     },
-    contents: { parts: [base64ToDataPart(optimizedImage), { text: "Analyze slide layout for EXHAUSTIVE DECOMPOSITION." }] }
+    contents: { parts: [base64ToDataPart(optimizedImage), { text: promptText }] }
   });
 
   const result = JSON.parse(cleanJsonString(response.text || '{"elements": []}'));
@@ -98,41 +93,89 @@ export const detectElements = async (imageBase64: string, modelName: string = MO
       description: el.description,
       box_2d: el.box_2d,
       z_order: el.z_order,
-      status: el.type === 'TEXT' ? 'COMPLETED' : 'PENDING',
-      textContent: el.text_content,
-      textColor: el.text_color,
-      isBold: el.is_bold,
+      status: 'PENDING', 
       attempts: 0
     })),
     backgroundColor,
-    usage: [{ model: modelName, usageMetadata: response.usageMetadata }]
+    usage: [{ model: 'gemini-3-pro-preview', usageMetadata: response.usageMetadata }]
   };
 };
 
-export const analyzeTextElement = async (element: SlideElement, crop: string) => {
-  const ai = getAiClient();
+export const analyzeTextElement = async (
+  element: SlideElement, 
+  crop: string, 
+  slideHeightPx: number,
+  paddingPx: number = 0
+) => {
   const response = await ai.models.generateContent({
     model: MODEL_TEXT_ANALYSIS,
     config: { responseMimeType: 'application/json' },
     contents: { parts: [base64ToDataPart(crop), { text: PROMPT_TEXT_EXTRACTION }] }
   });
   const data = JSON.parse(cleanJsonString(response.text || '{}'));
+  
+  // GEOMETRIC FONT SIZE CALCULATION
+  // We trust the Pro model's bounding box height more than the Flash model's visual estimation.
+  // Standard PPT Slide Height = 5.625 inches * 72 pts/inch = 405 pts.
+  const PPT_HEIGHT_PTS = 405; 
+  
+  // Calculate the height of the bounding box in PPT points
+  const boxHeightNormalized = Math.abs(element.box_2d[2] - element.box_2d[0]) / 1000;
+  const boxHeightPts = boxHeightNormalized * PPT_HEIGHT_PTS;
+  
+  const lineCount = Math.max(1, data.line_count || 1);
+  
+  // Calculation Logic:
+  // If 1 line: The box typically hugs the content. Font size is ~90% of box height (allowing for slight padding).
+  // If >1 line: The box includes line spacing (leading). Standard leading is ~1.15-1.2x font size.
+  let calculatedSize = 12;
+  
+  if (lineCount === 1) {
+    calculatedSize = boxHeightPts * 0.90;
+  } else {
+    calculatedSize = boxHeightPts / (lineCount * 1.15);
+  }
+  
+  // Round to nearest 0.5 to reduce noise (e.g., 13.2 -> 13, 13.6 -> 13.5)
+  calculatedSize = Math.round(calculatedSize * 2) / 2;
+  calculatedSize = Math.max(8, calculatedSize); // Clamp min size
+
+  const textRuns: TextRun[] = (data.runs || []).map((run: any) => ({
+    text: run.text,
+    color: run.color || "#000000",
+    size: calculatedSize, // Apply geometric size
+    bold: !!run.bold,
+    italic: !!run.italic,
+    font: run.font || "Arial"
+  }));
+
+  if (textRuns.length === 0) {
+      textRuns.push({
+          text: "Extracted Text",
+          color: "#000000",
+          size: calculatedSize,
+          bold: false,
+          italic: false,
+          font: "Arial"
+      });
+  }
+
   return {
-    data: { ...element, textContent: data.text, textColor: data.hexColor, isBold: data.isBold, status: 'COMPLETED' as const },
+    data: { 
+      ...element, 
+      textRuns,
+      status: 'COMPLETED' as const 
+    },
     usage: [{ model: MODEL_TEXT_ANALYSIS, usageMetadata: response.usageMetadata }]
   };
 };
 
-/**
- * STAGE 1: ANALYST
- */
 export const runAnalystStage = async (
   element: SlideElement, 
   crop: string, 
   model: string, 
   backgroundColor: string = '#FFFFFF'
 ) => {
-  const ai = getAiClient();
   const promptTemplate = SYSTEM_PROMPT_ANALYST
     .replace('{type}', element.type)
     .replace('{description}', element.description || 'object')
@@ -165,12 +208,7 @@ export const runAnalystStage = async (
   }
 };
 
-/**
- * STAGE 2: CLEANER
- * Supports refinement via inputOverride.
- */
 export const runCleanerStage = async (crop: string, prompt: string, model: string, inputOverride?: string) => {
-  const ai = getAiClient();
   const img = await loadImage(crop);
   const squareInput = await padImageToSquare(inputOverride || crop);
   
@@ -195,8 +233,6 @@ export const runCleanerStage = async (crop: string, prompt: string, model: strin
   }
   
   if (!base64) throw new Error("Cleaner failed to produce image.");
-  
-  // Use unpadGeneratedImage to correctly handle scale differences between original crop and generative output
   const restored = await unpadGeneratedImage(base64, img.width, img.height);
   
   return { 
@@ -205,11 +241,7 @@ export const runCleanerStage = async (crop: string, prompt: string, model: strin
   };
 };
 
-/**
- * STAGE 3: QA CRITIC
- */
 export const runQAStage = async (originalCrop: string, cleanedResult: string, model: string, cleaningGoal: string) => {
-  const ai = getAiClient();
   const criticPrompt = PROMPT_QA_CRITIC.replace('{cleaningGoal}', cleaningGoal);
   const response = await withTimeout<GenerateContentResponse>(
     ai.models.generateContent({

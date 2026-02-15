@@ -23,30 +23,35 @@ export const QA_MODELS = [
 ];
 
 export const SYSTEM_PROMPT_DETECTION = `
-You are an expert Vision AI specializing in UI and Slide Decomposition. Your goal is to identify EVERY SINGLE visual element on the provided slide with microscopic precision.
+You are a Pixel-Perfect Vision AI for Slide Layout Analysis. Your mission is to decompose the slide into constituent elements with EXACT bounding boxes.
 
-CRITICAL DETECTION RULES:
-1. DETECT SMALL ICONS: Scan carefully for small icons, bullets, tiny graphical marks, and decorative elements.
-2. INDIVIDUAL COMPONENTS: Do not group disparate items.
-3. LOGO INTEGRITY: Detect logos as single units.
-4. TYPE CLASSIFICATION:
-   - TEXT: Any readable character-based content.
-   - SHAPE: Geometric forms (boxes, circles, lines, blobs).
-   - ICON: Graphic symbols or logos.
-   - IMAGE: Photographic or complex multi-color illustrations.
+COORDINATE SYSTEM:
+- [ymin, xmin, ymax, xmax] normalized to 0-1000.
+- 0,0 is Top-Left. 1000,1000 is Bottom-Right.
+- Ensure coordinates are grounded to the visible edges of the image.
 
-Return a JSON object:
+CRITICAL TEXT BOXING RULES (ANTI-DRIFT):
+1. INCLUDE DESCENDERS: Your bounding box for text MUST extend downwards to include the tails of letters like 'g', 'y', 'j', 'p', 'q'. 
+   - FAILURE MODE: If you only box from Baseline to Cap-Height, the box will appear shifted UP. 
+   - FIX: Always push the 'ymax' down slightly to ensure the entire ink of the text is inside.
+2. INCLUDE ASCENDERS: Ensure the 'ymin' captures accents and tall characters ('h', 'l', 'T').
+3. SEMANTIC BLOCKS: Group paragraphs into single boxes. Do not split lines unless they are distinct headers.
+
+ELEMENT TYPES:
+- TEXT: All readable text blocks.
+- SHAPE: Geometric backgrounds, cards, lines.
+- ICON: Small symbols, logos, arrows.
+- IMAGE: Photos, screenshots, illustrations.
+
+Return JSON:
 {
   "backgroundColor": "#hex", 
   "elements": [
     {
       "type": "TEXT" | "SHAPE" | "ICON" | "IMAGE",
-      "description": "highly specific visual detail", 
+      "description": "visual description", 
       "box_2d": [ymin, xmin, ymax, xmax], 
-      "z_order": integer,
-      "text_content": "string (if TEXT)",
-      "text_color": "#hex",
-      "is_bold": boolean
+      "z_order": integer
     }
   ]
 }
@@ -60,18 +65,19 @@ GOAL: Extract the target {type} as a PURE ASSET.
 TARGET SUBJECT: {description}
 CONTEXT: The original slide background is {bgColor}.
 
+CONSERVATION PROTOCOL (Based on Type):
+1. FOR IMAGES (Photographs/Illustrations): PRESERVE internal detail. Only remove clear overlays like text labels, buttons, or watermarks that are ON TOP of the image. Do NOT erase the contents of the photograph itself.
+2. FOR SHAPES/ICONS: STRIP all internal content. Generate instructions to wipe any text or nested icons inside the shape, leaving a clean, solid or gradient container.
+
 STRICT ISOLATION PROTOCOL:
-1. PURE SUBJECT EXTRACTION: Only the {description} itself should remain. 
-2. COMPLETE DESTRUCTION OF OVERLAYS: You MUST instruct the removal of all text, numbers, sub-icons, bullet points, or shadows that are sitting ON TOP of the {description}.
-3. INTERNAL CLEANING: If the target is a container (like a box or circle), the final result must be an EMPTY version of that container. The fill and borders must match the original perfectly, but any content inside it must be erased.
-4. EXTERNAL CLEANING: Remove all background clutter, neighboring text, and extraneous marks.
-5. NO HALLUCINATION: Do not add details that weren't in the original base shape.
+- REMOVE all background clutter and neighboring elements outside the target bounds.
+- OUTPUT on a solid #FFFFFF white background.
 
 Return JSON:
 {
-  "isWhiteInterior": boolean, // Set to TRUE only if the object's BASE color is white.
-  "cleaningGoal": "Isolate the {description}, stripping away all internal and overlapping text/clutter while preserving base visual fidelity.",
-  "prompt": "ISOLATION TASK: Isolate the {description}. \n1. REMOVE all text, words, characters, and overlaying symbols.\n2. WIPE the interior of the {type} completely clean of content.\n3. PRESERVE the exact colors, gradients, and border styles of the original {description}.\n4. OUTPUT the result on a solid #FFFFFF white background. No other elements or noise allowed." 
+  "isWhiteInterior": boolean, 
+  "cleaningGoal": "Isolate the {description}, stripping away all external clutter and internal overlays while preserving core visual fidelity.",
+  "prompt": "ISOLATION TASK: Isolate the {description}. \n1. REMOVE all overlapping text and extraneous symbols.\n2. {type}-SPECIFIC: {type === 'IMAGE' ? 'Keep background detail but remove text.' : 'Wipe the interior of the shape completely clean.'}\n3. OUTPUT on solid #FFFFFF white background." 
 }
 `;
 
@@ -84,7 +90,24 @@ export const getPromptForCleaning = (type: ElementType, description?: string) =>
 };
 
 export const PROMPT_TEXT_EXTRACTION = `
-Return JSON: {"text": "string", "hexColor": "#RRGGBB", "isBold": boolean}
+Analyze the provided text crop.
+1. Transcribe the text exactly.
+2. Count the number of visual lines (line_count).
+3. Identify font properties.
+
+Return JSON:
+{
+  "line_count": number,
+  "runs": [
+    {
+      "text": "string content",
+      "color": "#RRGGBB",
+      "bold": boolean,
+      "italic": boolean,
+      "font": "string"
+    }
+  ]
+}
 `;
 
 export const PROMPT_QA_CRITIC = `
