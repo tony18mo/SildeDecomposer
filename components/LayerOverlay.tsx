@@ -7,6 +7,7 @@ interface LayerOverlayProps {
   elements: SlideElement[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onUpdateBox?: (id: string, box: [number, number, number, number]) => void;
 }
 
 export const LayerOverlay: React.FC<LayerOverlayProps> = ({ imageSrc, elements, selectedId, onSelect }) => {
